@@ -1,0 +1,7 @@
+pickFolder
+cd Moti-Repo
+lg2 init .
+lg2 add .
+lg2 commit -m "Add proposal PDFs"
+lg2 remote add origin https://github.com
+lg2 push origin main
