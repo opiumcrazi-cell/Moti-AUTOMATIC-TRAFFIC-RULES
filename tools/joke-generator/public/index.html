@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Random Joke Generator — Favorites, Share, Speak</title>
+  <style>
+    :root{--bg:#f7f8fb;--card:#fff;--muted:#6b7280;--accent:#0b74de}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;max-width:760px;margin:28px auto;padding:16px;background:var(--bg);color:#111}
+    h1{font-size:20px;margin:0 0 12px}
+    .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    select,input[type=checkbox]{padding:8px;border-radius:6px;border:1px solid #ddd}
+    button{background:var(--accent);color:#fff;border:none;padding:9px 12px;border-radius:8px;cursor:pointer}
+    button.secondary{background:#e6e9ee;color:#111}
+    button.icon{padding:8px 10px}
+    .card{background:var(--card);border-radius:12px;padding:14px;margin-top:16px;box-shadow:0 6px 14px rgba(12,20,30,0.06)}
+    .setup{font-weight:700;margin-bottom:8px}
+    .meta{color:var(--muted);font-size:13px;margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+    .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+    #favoritesList{margin-top:10px;display:grid;gap:8px}
+    .fav{padding:10px;border-radius:8px;background:#fbfdff;border:1px solid #eef4ff;display:flex;justify-content:space-between;align-items:flex-start}
+    .fav .left{flex:1}
+    .small{font-size:13px;color:var(--muted)}
+    .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:#111;color:#fff;padding:8px 12px;border-radius:8px;display:none}
+    @media (max-width:520px){.controls{flex-direction:column;align-items:stretch} .actions{justify-content:stretch}}
+  </style>
+</head>
+<body>
+  <h1>Random Joke Generator</h1>
+
+  <div class="controls">
+    <label>
+      Category
+      <select id="category">
+        <option value="Any">Any</option>
+        <option value="Programming">Programming</option>
+        <option value="Misc">Misc</option>
+        <option value="Dark">Dark</option>
+        <option value="Pun">Pun</option>
+        <option value="Spooky">Spooky</option>
+        <option value="Christmas">Christmas</option>
+      </select>
+    </label>
+
+    <label style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="safe" checked />
+      <span class="small">Safe mode</span>
+    </label>
+
+    <button id="getJoke">Get Joke</button>
+    <button id="viewFav" class="secondary">View Favorites</button>
+  </div>
+
+  <div id="jokeCard" class="card" aria-live="polite" hidden>
+    <div id="jokeBody"></div>
+    <div class="meta" id="jokeMeta"></div>
+    <div class="actions">
+      <button id="saveFav">Save Favorite</button>
+      <button id="speak" class="secondary">Speak</button>
+      <button id="shareTwitter" class="secondary">Share to Twitter</button>
+      <button id="copyBtn" class="secondary">Copy</button>
+    </div>
+  </div>
+
+  <div id="favorites" class="card" hidden>
+    <h2 style="margin:0 0 8px">Favorites</h2>
+    <div id="favoritesList" aria-live="polite"></div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button id="downloadFav">Download JSON</button>
+      <button id="clearFav" class="secondary">Clear All</button>
+      <button id="closeFav" class="secondary">Close</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const apiBase = '/api/joke'; // use local proxy
+    const getJokeBtn = document.getElementById('getJoke');
+    const categoryEl = document.getElementById('category');
+    const safeEl = document.getElementById('safe');
+    const jokeCard = document.getElementById('jokeCard');
+    const jokeBody = document.getElementById('jokeBody');
+    const jokeMeta = document.getElementById('jokeMeta');
+    const saveFavBtn = document.getElementById('saveFav');
+    const speakBtn = document.getElementById('speak');
+    const shareTwitterBtn = document.getElementById('shareTwitter');
+    const copyBtn = document.getElementById('copyBtn');
+    const favSection = document.getElementById('favorites');
+    const viewFavBtn = document.getElementById('viewFav');
+    const closeFavBtn = document.getElementById('closeFav');
+    const favoritesList = document.getElementById('favoritesList');
+    const downloadFavBtn = document.getElementById('downloadFav');
+    const clearFavBtn = document.getElementById('clearFav');
+    const toast = document.getElementById('toast');
+
+    let currentJoke = null;
+    const FAVORITES_KEY = 'joke_favorites_v1';
+
+    function showToast(msg, time = 1800){
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(()=> toast.style.display = 'none', time);
+    }
+
+    function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\"':'&quot;',"'":'&#39;'}[m])); }
+
+    async function fetchJoke(){
+      const cat = encodeURIComponent(categoryEl.value || 'Any');
+      const safe = safeEl.checked ? '&safe-mode' : '';
+      const url = `${apiBase}?category=${cat}${safe}`;
+      getJokeBtn.disabled = true;
+      getJokeBtn.textContent = 'Loading…';
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('API error');
+        const data = await res.json();
+        currentJoke = normalizeJoke(data);
+        renderCurrentJoke();
+      } catch (err) {
+        jokeBody.innerHTML = `<div style="color:tomato">Error: ${escapeHtml(err.message)}</div>`;
+        jokeMeta.textContent = '';
+        jokeCard.hidden = false;
+      } finally {
+        getJokeBtn.disabled = false;
+        getJokeBtn.textContent = 'Get Joke';
+      }
+    }
+
+    function normalizeJoke(data){
+      if (!data) return null;
+      if (data.type === 'single') {
+        return { id: data.id, category: data.category, type: 'single', text: data.joke, createdAt: Date.now() };
+      } else {
+        return { id: data.id, category: data.category, type: 'twopart', setup: data.setup, delivery: data.delivery, createdAt: Date.now() };
+      }
+    }
+
+    function renderCurrentJoke(){
+      if (!currentJoke) return;
+      let html = '';
+      if (currentJoke.type === 'single') {
+        html = `<div>${escapeHtml(currentJoke.text)}</div>`;
+      } else {
+        html = `<div class="setup">${escapeHtml(currentJoke.setup)}</div><div>${escapeHtml(currentJoke.delivery)}</div>`;
+      }
+      jokeBody.innerHTML = html;
+      jokeMeta.textContent = `Category: ${currentJoke.category} • Id: ${currentJoke.id || 'n/a'}`;
+      jokeCard.hidden = false;
+    }
+
+    function getFavorites(){
+      try {
+        const raw = localStorage.getItem(FAVORITES_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch { return []; }
+    }
+
+    function saveFavorites(list){
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(list));
+    }
+
+    function addFavorite(){
+      if (!currentJoke) return showToast('No joke to save');
+      const list = getFavorites();
+      const exists = list.find(j => (j.id && currentJoke.id && j.id === currentJoke.id) || (j.text && currentJoke.text && j.text === currentJoke.text) || (j.setup && currentJoke.setup && j.setup === currentJoke.setup && j.delivery === currentJoke.delivery));
+      if (exists) return showToast('Already in favorites');
+      const fav = { ...currentJoke, savedAt: Date.now() };
+      list.unshift(fav);
+      saveFavorites(list);
+      showToast('Saved to favorites');
+    }
+
+    function openFavorites(){
+      renderFavorites();
+      favSection.hidden = false;
+    }
+
+    function closeFavorites(){
+      favSection.hidden = true;
+    }
+
+    function renderFavorites(){
+      const list = getFavorites();
+      favoritesList.innerHTML = '';
+      if (!list.length){
+        favoritesList.innerHTML = '<div class="small">No favorites yet — save jokes with "Save Favorite".</div>';
+        return;
+      }
+      for (const j of list){
+        const el = document.createElement('div');
+        el.className = 'fav';
+        const left = document.createElement('div');
+        left.className = 'left';
+        let inner = '';
+        if (j.type === 'single') inner = `<div>${escapeHtml(j.text)}</div>`;
+        else inner = `<div class="setup">${escapeHtml(j.setup)}</div><div>${escapeHtml(j.delivery)}</div>`;
+        inner += `<div class="small">Category: ${escapeHtml(j.category || 'Any')} • Saved: ${new Date(j.savedAt).toLocaleString()}</div>`;
+        left.innerHTML = inner;
+        const right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.flexDirection = 'column';
+        right.style.gap = '6px';
+        right.style.marginLeft = '12px';
+        const share = document.createElement('button');
+        share.className = 'icon secondary';
+        share.textContent = 'Share';
+        share.onclick = () => shareToTwitter(j);
+        const speak = document.createElement('button');
+        speak.className = 'icon secondary';
+        speak.textContent = 'Speak';
+        speak.onclick = () => speakJoke(j);
+        const copy = document.createElement('button');
+        copy.className = 'icon secondary';
+        copy.textContent = 'Copy';
+        copy.onclick = () => { copyText(j); showToast('Copied'); };
+        const del = document.createElement('button');
+        del.className = 'icon';
+        del.style.background='#ff6b6b';
+        del.textContent = 'Delete';
+        del.onclick = () => { deleteFavorite(j); renderFavorites(); };
+        right.appendChild(share); right.appendChild(speak); right.appendChild(copy); right.appendChild(del);
+        el.appendChild(left);
+        el.appendChild(right);
+        favoritesList.appendChild(el);
+      }
+    }
+
+    function deleteFavorite(jokeObj){
+      let list = getFavorites();
+      list = list.filter(j => JSON.stringify(j) !== JSON.stringify(jokeObj));
+      saveFavorites(list);
+      showToast('Deleted');
+    }
+
+    function shareToTwitter(j){
+      const text = formatJokeText(j);
+      const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
+      window.open(url, '_blank');
+    }
+
+    function formatJokeText(j){
+      if (!j) return '';
+      if (j.type === 'single') return `${j.text} — (${j.category || 'Any'})`;
+      return `${j.setup} — ${j.delivery} (${j.category || 'Any'})`;
+    }
+
+    function speakJoke(j){
+      if (!('speechSynthesis' in window)) return showToast('Speech not supported');
+      const utter = new SpeechSynthesisUtterance();
+      utter.lang = 'en-US';
+      utter.rate = 1;
+      utter.pitch = 1;
+      utter.text = formatJokeText(j);
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    }
+
+    function copyText(j){
+      const txt = formatJokeText(j);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).catch(()=> fallbackCopy(txt));
+      } else fallbackCopy(txt);
+    }
+
+    function fallbackCopy(text){
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch(e) {}
+      ta.remove();
+    }
+
+    function downloadFavorites(){
+      const list = getFavorites();
+      const blob = new Blob([JSON.stringify(list, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'joke_favorites.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function clearFavorites(){
+      if (!confirm('Clear all favorites?')) return;
+      localStorage.removeItem(FAVORITES_KEY);
+      renderFavorites();
+      showToast('Cleared favorites');
+    }
+
+    getJokeBtn.addEventListener('click', fetchJoke);
+    saveFavBtn.addEventListener('click', ()=>{ addFavorite(); });
+    viewFavBtn.addEventListener('click', openFavorites);
+    closeFavBtn.addEventListener('click', closeFavorites);
+    downloadFavBtn.addEventListener('click', downloadFavorites);
+    clearFavBtn.addEventListener('click', clearFavorites);
+    shareTwitterBtn.addEventListener('click', ()=>{ if (!currentJoke) return showToast('No joke'); shareToTwitter(currentJoke); });
+    speakBtn.addEventListener('click', ()=>{ if (!currentJoke) return showToast('No joke'); speakJoke(currentJoke); });
+    copyBtn.addEventListener('click', ()=>{ if (!currentJoke) return showToast('No joke'); copyText(currentJoke); showToast('Copied'); });
+
+    window.addEventListener('load', () => {
+      // fetchJoke(); // enable if you want an initial joke
+    });
+  </script>
+</body>
+</html>
